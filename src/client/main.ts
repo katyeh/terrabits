@@ -67,6 +67,24 @@ function init(): void {
   const glass = new THREE.Mesh(shellGeo, glassMat);
   scene.add(glass);
 
+  // Soil
+  const soilMat = new THREE.MeshStandardMaterial({
+    color: 0x6d5331,
+    roughness: 0.95,
+    metalness: 0.0,
+  });
+  const soilGeo = new THREE.CylinderGeometry(
+    0.72, // top radius
+    0.85, // bottom radius
+    0.28, // height
+    48 // segments
+  );
+
+  const soil = new THREE.Mesh(soilGeo, soilMat);
+  // half-height is 0.14 → place center around -0.62 for a small clearance
+  soil.position.y = -0.62;
+  scene.add(soil);
+
   const edges = new THREE.EdgesGeometry(shellGeo);
   const frame = new THREE.LineSegments(
     edges,
