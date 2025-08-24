@@ -11,11 +11,127 @@ type PhysicalGlass = THREE.MeshPhysicalMaterial & {
   specularIntensity: number;
 };
 
-let scene: THREE.Scene;
-let camera: THREE.PerspectiveCamera;
-let renderer: THREE.WebGLRenderer;
-let controls: OrbitControls;
-let soilMesh: THREE.Mesh | null = null;
+const SHELL_RADIUS = 0.8;
+const SOIL_HEIGHT = 0.12;
+
+const CAMERA_FOV = 60;
+const CAMERA_NEAR = 0.1;
+const CAMERA_FAR = 100;
+
+const TONE_MAPPING_EXPOSURE = 1.0;
+const DPR_CAP = 2;
+
+function createRenderer(canvas: HTMLCanvasElement) {
+  const r = new THREE.WebGLRenderer({ canvas, antialias: true });
+  r.setPixelRatio(Math.min(window.devicePixelRatio, DPR_CAP));
+  r.setSize(window.innerWidth, window.innerHeight);
+  r.physicallyCorrectLights = true;
+  r.toneMapping = THREE.ACESFilmicToneMapping;
+  r.toneMappingExposure = TONE_MAPPING_EXPOSURE;
+  return r;
+}
+
+function createCamera() {
+  camera = new THREE.PerspectiveCamera(
+    CAMERA_FOV,
+    window.innerWidth / window.innerHeight,
+    CAMERA_NEAR,
+    CAMERA_FAR
+  );
+  camera.position.set(0, 0.4, 2.2);
+  return camera;
+}
+
+function createEnv(renderer: THREE.WebGLRenderer) {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  pmrem.dispose();
+  return env;
+}
+
+function createLights(scene: THREE.Scene) {
+  scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+  dir.position.set(2, 3, 2);
+  dir.castShadow = false;
+  scene.add(dir);
+}
+
+function createControls(camera: THREE.PerspectiveCamera, dom: HTMLElement) {
+  const c = new OrbitControls(camera, dom);
+  c.enableDamping = true;
+  c.minDistance = 1.2;
+  c.maxDistance = 5;
+  c.target.set(0, 0, 0);
+  c.update();
+  return c;
+}
+
+function createGlassMaterial(): THREE.MeshPhysicalMaterial {
+  return new THREE.MeshPhysicalMaterial({
+    color: 0xffffff,
+    metalness: 0,
+    roughness: 0.08,
+    envMapIntensity: 1.0,
+  }) as PhysicalGlass;
+}
+
+function createGlassShell(mat: THREE.Material) {
+  const geo = new THREE.DodecahedronGeometry(SHELL_RADIUS, 0); // 12 flat faces
+  const mesh = new THREE.Mesh(geo, mat);
+  return { mesh, geo };
+}
+
+function createSoilFromShell(glass: THREE.Mesh): THREE.Mesh | null {
+  const floorY = getBottomFaceY(glass);
+  const basePts = getBottomFacePolygon(glass, floorY);
+  if (basePts.length < 3) return null;
+
+  const soilMat = new THREE.MeshStandardMaterial({
+    color: 0x6d5331,
+    roughness: 0.95,
+    metalness: 0.0,
+  });
+
+  const center = basePts
+    .reduce((a, p) => a.add(p), new THREE.Vector2())
+    .multiplyScalar(1 / basePts.length);
+
+  const inset = 0.996;
+  const insetPts = basePts.map((p) => p.clone().sub(center).multiplyScalar(inset));
+  const shape = new THREE.Shape(insetPts);
+
+  const soilGeo = new THREE.ExtrudeGeometry(shape, {
+    depth: SOIL_HEIGHT,
+    bevelEnabled: false,
+    steps: 1,
+  });
+  soilGeo.rotateX(-Math.PI / 2);
+
+  const soil = new THREE.Mesh(soilGeo, soilMat);
+  const soilY = floorY + SOIL_HEIGHT / 2 - 0.001; // sink slightly to appear flush
+  soil.position.set(center.x, soilY, center.y); // put it back under the glass
+  soil.rotation.y = THREE.MathUtils.degToRad(36);
+
+  return soil;
+}
+
+function onWindowResize(): void {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function animate(): void {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+let scene!: THREE.Scene;
+let camera!: THREE.PerspectiveCamera;
+let renderer!: THREE.WebGLRenderer;
+let controls!: OrbitControls;
 
 function alignFaceDown(mesh: THREE.Mesh) {
   const geom = mesh.geometry as THREE.BufferGeometry;
@@ -145,37 +261,13 @@ function init(): void {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a0a0a);
 
-  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
-  camera.position.set(0, 0.4, 2.2);
-
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.physicallyCorrectLights = true;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
-  // No clipping needed for soil placement
-
-  // Subtle reflections via PMREM + RoomEnvironment
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  scene.environment = env;
+  camera = createCamera();
+  renderer = createRenderer(canvas);
+  scene.environment = createEnv(renderer);
 
   // Lighting
-  scene.add(new THREE.AmbientLight(0xffffff, 0.3));
-  const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-  dir.position.set(2, 3, 2);
-  dir.castShadow = false;
-  scene.add(dir);
-
-  // Material: place this before creating the geometry
-  const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0xffffff,
-    metalness: 0,
-    roughness: 0.08,
-    envMapIntensity: 1.0,
-  }) as PhysicalGlass;
-  // Advanced props (older @types/three workaround)
+  createLights(scene);
+  const glassMat = createGlassMaterial();
   glassMat.transmission = 1.0;
   glassMat.thickness = 0.2;
   glassMat.ior = 1.5;
@@ -190,45 +282,17 @@ function init(): void {
   glassMat.attenuationDistance = 3.0;
 
   // Realistic glass sphere (terrarium shell)
-  const shellGeo = new THREE.DodecahedronGeometry(0.8, 0); // 12 flat faces
-  const glass = new THREE.Mesh(shellGeo, glassMat);
+  const { mesh: glass, geo: shellGeo } = createGlassShell(glassMat);
   scene.add(glass);
 
   alignFaceDown(glass);
   glass.updateMatrixWorld(true);
 
   // Compute bottom face height and place soil precisely inside the glass
-  const floorY = getBottomFaceY(glass);
+  const soil = createSoilFromShell(glass);
 
-  const soilMat = new THREE.MeshStandardMaterial({
-    color: 0x6d5331,
-    roughness: 0.95,
-    metalness: 0.0,
-  });
-  const soilHeight = 0.12;
-  const soilY = floorY + soilHeight / 2 - 0.001; // sink slightly to appear flush
-  const basePts = getBottomFacePolygon(glass, floorY);
-  if (basePts.length >= 3) {
-    const center = basePts
-      .reduce((a, p) => a.add(p), new THREE.Vector2())
-      .multiplyScalar(1 / basePts.length);
-    const inset = 0.996; // tighter fit to edges
-
-    // localize points so pivot is at (0,0)
-    const insetPts = basePts.map((p) => p.clone().sub(center).multiplyScalar(inset));
-    const shape = new THREE.Shape(insetPts);
-
-    const soilGeo = new THREE.ExtrudeGeometry(shape, {
-      depth: soilHeight,
-      bevelEnabled: false,
-      steps: 1,
-    });
-    soilGeo.rotateX(-Math.PI / 2);
-
-    soilMesh = new THREE.Mesh(soilGeo, soilMat);
-    soilMesh.position.set(center.x, soilY, center.y); // put it back under the glass
-    scene.add(soilMesh);
-    soilMesh.rotation.y = THREE.MathUtils.degToRad(36);
+  if (soil) {
+    scene.add(soil);
   }
 
   const edges = new THREE.EdgesGeometry(shellGeo);
@@ -242,27 +306,8 @@ function init(): void {
   );
 
   frame.scale.setScalar(1.001);
-
   glass.add(frame);
 
-  controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.minDistance = 1.2;
-  controls.maxDistance = 5;
-  controls.target.set(0, 0, 0);
-  controls.update();
-
+  controls = createControls(camera, renderer.domElement);
   window.addEventListener('resize', onWindowResize, false);
-}
-
-function onWindowResize(): void {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-}
-
-function animate(): void {
-  requestAnimationFrame(animate);
-  controls.update();
-  renderer.render(scene, camera);
 }
