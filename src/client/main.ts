@@ -136,8 +136,6 @@ function getBottomFacePolygon(glass: THREE.Mesh, floorY: number, epsilon = 1e-3)
   return pts;
 }
 
-// removed: measureClearRadius (replaced by polygon-based soil fit)
-
 init();
 animate();
 
@@ -230,7 +228,6 @@ function init(): void {
     soilMesh = new THREE.Mesh(soilGeo, soilMat);
     soilMesh.position.set(center.x, soilY, center.y); // put it back under the glass
     scene.add(soilMesh);
-    // rotate in 72° steps (0,72,144,216,288). Change the multiplier to 0..4
     soilMesh.rotation.y = THREE.MathUtils.degToRad(36);
   }
 
@@ -256,14 +253,6 @@ function init(): void {
   controls.update();
 
   window.addEventListener('resize', onWindowResize, false);
-
-  // Rotate soil with keyboard (A/D)
-  window.addEventListener('keydown', (e) => {
-    if (!soilMesh) return;
-    const step = THREE.MathUtils.degToRad(2);
-    if (e.key === 'a' || e.key === 'A') soilMesh.rotation.y -= step;
-    if (e.key === 'd' || e.key === 'D') soilMesh.rotation.y += step;
-  });
 }
 
 function onWindowResize(): void {
